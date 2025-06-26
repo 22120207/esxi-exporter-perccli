@@ -1,5 +1,62 @@
 # (Remote) ESXi PERCCLI Exporter
 
+```
+root@agent:/home/esxi-perccli-exporter# curl http://localhost:10424/metrics?target=10.0.100.252
+# HELP megaraid_controller_info MegaRAID controller info
+# TYPE megaraid_controller_info gauge
+megaraid_controller_info{controller="0",fwversion="4.300.00-8368",model="PERC H730 Mini",serial="79L013X"} 1.0
+# HELP megaraid_controller_status Controller status (1=Optimal, 0=Not Optimal)
+# TYPE megaraid_controller_status gauge
+megaraid_controller_status{controller="0"} 1.0
+# HELP megaraid_controller_temperature Controller temperature in Celsius
+# TYPE megaraid_controller_temperature gauge
+megaraid_controller_temperature{controller="0"} 56.0
+# HELP megaraid_drive_status Physical drive status (1=Online, 0=Other)
+# TYPE megaraid_drive_status gauge
+megaraid_drive_status{controller="0",drive="Drive /c0/e32/s2"} 1.0
+megaraid_drive_status{controller="0",drive="Drive /c0/e32/s3"} 1.0
+# HELP megaraid_drive_temp Physical drive temperature in Celsius
+# TYPE megaraid_drive_temp gauge
+# HELP megaraid_drive_smart Drive SMART attributes
+# TYPE megaraid_drive_smart gauge
+megaraid_drive_smart{attribute="raw_read_error_rate",controller="0",drive="Drive /c0/e32/s2"} 25700.0
+megaraid_drive_smart{attribute="power_on_hours",controller="0",drive="Drive /c0/e32/s2"} 29618.0
+megaraid_drive_smart{attribute="power_cycle_count",controller="0",drive="Drive /c0/e32/s2"} 20.0
+megaraid_drive_smart{attribute="wear_leveling_count",controller="0",drive="Drive /c0/e32/s2"} 100.0
+megaraid_drive_smart{attribute="used_reserved_block_count_total",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="program_fail_count_total",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="erase_fail_count_total",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="runtime_bad_block",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="uncorrectable_error_count",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="airflow_temperature_celsius",controller="0",drive="Drive /c0/e32/s2"} 26.0
+megaraid_drive_smart{attribute="hardware_ecc_recovered",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="udma_crc_error_count",controller="0",drive="Drive /c0/e32/s2"} 0.0
+megaraid_drive_smart{attribute="por_recovery_count",controller="0",drive="Drive /c0/e32/s2"} 14.0
+megaraid_drive_smart{attribute="total_host_writes",controller="0",drive="Drive /c0/e32/s2"} 2.20315629552e+011
+megaraid_drive_smart{attribute="initial_bad_block_count",controller="0",drive="Drive /c0/e32/s2"} 40962.0
+megaraid_drive_smart{attribute="raw_read_error_rate",controller="0",drive="Drive /c0/e32/s3"} 25700.0
+megaraid_drive_smart{attribute="power_on_hours",controller="0",drive="Drive /c0/e32/s3"} 29622.0
+megaraid_drive_smart{attribute="power_cycle_count",controller="0",drive="Drive /c0/e32/s3"} 22.0
+megaraid_drive_smart{attribute="wear_leveling_count",controller="0",drive="Drive /c0/e32/s3"} 97.0
+megaraid_drive_smart{attribute="used_reserved_block_count_total",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="program_fail_count_total",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="erase_fail_count_total",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="runtime_bad_block",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="uncorrectable_error_count",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="airflow_temperature_celsius",controller="0",drive="Drive /c0/e32/s3"} 25.0
+megaraid_drive_smart{attribute="hardware_ecc_recovered",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="udma_crc_error_count",controller="0",drive="Drive /c0/e32/s3"} 0.0
+megaraid_drive_smart{attribute="por_recovery_count",controller="0",drive="Drive /c0/e32/s3"} 17.0
+megaraid_drive_smart{attribute="total_host_writes",controller="0",drive="Drive /c0/e32/s3"} 2.2070721883e+011
+megaraid_drive_smart{attribute="initial_bad_block_count",controller="0",drive="Drive /c0/e32/s3"} 40962.0
+# HELP megaraid_virtual_drive_status Virtual drive status (1=Optimal, 0=Other)
+# TYPE megaraid_virtual_drive_status gauge
+megaraid_virtual_drive_status{controller="0",vd="DG0/VD0"} 1.0
+# HELP megaraid_bbu_health Battery Backup Unit health (1=Healthy, 0=Unhealthy)
+# TYPE megaraid_bbu_health gauge
+megaraid_bbu_health{controller="0"} 1.0
+```
+
 This is another Prometheus exporter, but is meant to target machines running ESXi that have a PERC RAID controller. This essentially leverages the [storcli.py](https://github.com/prometheus-community/node-exporter-textfile-collector-scripts/blob/f5c56e75208e5d1ba4ce90b8285e924ec3e17cda/storcli.py) textfile collector's functionality, but does so over `sshpass`. It's scuffed, I know, but it works. I couldn't find anything else that allowed me to fetch the RAID controller's metrics (even if it was just some SMART data).
 
 This tool relies on installing `perccli` on the ESXi machine as a `.vib`, and then the exporter SSHs into the machine to run the command `/opt/lsi/perccli/perccli /cALL show all J` to gather the JSON the command outputs, and then exposes the information for Prometheus to scrape on `/metrics`.

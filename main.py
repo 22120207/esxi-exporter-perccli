@@ -4,11 +4,12 @@ import yaml
 import subprocess
 import logging
 import json
-from datetime import datetime
-from flask import Flask, request, Response # type: ignore
-from prometheus_client import CollectorRegistry, Gauge, generate_latest # type: ignore
-import shlex
 import re
+import shlex
+from datetime import datetime
+from flask import Flask, request, Response  # type: ignore
+from prometheus_client import CollectorRegistry, Gauge, generate_latest  # type: ignore
+
 
 app = Flask("ESXi PERCCLI Exporter")
 
@@ -20,9 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PercMetrics:
-    """Class to collect and expose PERCCLI metrics, including SMART data, for Prometheus."""
     def __init__(self, username: str, password: str, host: str) -> None:
-        """Initialize PercMetrics with credentials and host."""
         self.registry = CollectorRegistry()
         self.namespace = "megaraid"
         self.username = username
@@ -80,103 +79,96 @@ class PercMetrics:
         }
 
     def parse_smart_data(self, smart_data_hex: str) -> dict:
-        """Parse SMART data from hexadecimal string."""
-        logger.debug(f"Parsing SMART data hex: {smart_data_hex}")
+        attributes = {}
         try:
             hex_clean = re.sub(r'[^0-9a-fA-F]', '', smart_data_hex)
-            bytes_list = [hex_clean[i:i+2] for i in range(0, len(hex_clean), 2)]
-            attributes = {}
-
-            i = 0
-            while i < len(bytes_list):
-                if i + 12 > len(bytes_list):
-                    break
-
-                attr_id_candidate = int(bytes_list[i], 16)
-                if attr_id_candidate == 0x00:
-                    i += 1
-                    continue
-                
-                current_block = bytes_list[i:i+12]
-                
-                attr_id = int(current_block[0], 16)
-
-                raw_value_bytes = current_block[5:11]
-                raw_value_bytes_reversed = raw_value_bytes[::-1] # Little-endian
-                raw_value_hex = ''.join(raw_value_bytes_reversed)
-                
-                try:
-                    raw_value = int(raw_value_hex, 16)
-                except ValueError:
-                    logger.warning(f"Could not convert raw value hex '{raw_value_hex}' for attribute ID {attr_id}. Skipping this potential block by 1 byte.")
-                    i += 1
-                    continue
-
-                attr_name_map = {
-                    0x01: "raw_read_error_rate",
-                    0x03: "spin_up_time",
-                    0x04: "start_stop_count",
-                    0x05: "reallocated_sector_count",
-                    0x07: "seek_error_rate",
-                    0x09: "power_on_hours",
-                    0x0C: "power_cycle_count",
-                    0x53: "initial_bad_block_count", # Added based on documentation for 0x53
-                    0xB1: "wear_leveling_count", # Documentation lists B1 as "Wear Range Delta", but your log suggests it's similar to wear leveling count. Will keep your name for now.
-                    0xB3: "used_reserved_block_count_total",
-                    0xB5: "program_fail_count_total",
-                    0xB6: "erase_fail_count_total",
-                    0xB7: "runtime_bad_block", # Also "SATA Downshift Error Count" - kept your existing name
-                    0xBB: "uncorrectable_error_count", # Doc says "Reported Uncorrectable Errors"
-                    0xBE: "airflow_temperature_celsius", # Doc says "Temperature Difference or Airflow Temperature"
-                    0xC2: "temperature_celsius", # Doc says "Temperature or Temperature Celsius"
-                    0xC3: "hardware_ecc_recovered",
-                    0xC4: "reallocation_event_count",
-                    0xC6: "uncorrectable_sector_count", # Doc says "(Offline) Uncorrectable Sector Count"
-                    0xC7: "udma_crc_error_count", # Doc says "UltraDMA CRC Error Count"
-                    0xEB: "por_recovery_count", # Doc says "Good Block Count AND System(Free) Block Count" for 0xEB, which is different than your name. Given your name and the value, it might be specific to your drive. I will keep your name based on observed value logic.
-                    0xF1: "total_host_writes", # Doc says "Total LBAs Written or Total Host Writes"
-                    0xF2: "total_host_reads", # Added, common to have alongside F1
-                    0xE6: "g_sense_error_rate", # Also documented as 0xBF
-                    0xE7: "ssd_life_left", # Doc says "Life Left (SSDs) or Temperature"
-                }
-                
-                attr_name = attr_name_map.get(attr_id, f"unknown_{attr_id}")
-                
-                # Special handling for temperature attributes as per documentation and common practice
-                # For 0xBE (Airflow Temperature), the doc suggests it's often (100 - temp. °C) or raw temp.
-                # Given your raw value was '1a' (26) which is plausible for temperature:
-                # We'll take current_block[5] (first byte of raw value) as the temperature.
-                if attr_id == 0xBE:
-                    temp_val_byte = current_block[5] # First byte of the raw value (bytes 5-10)
-                    try:
-                        raw_value = int(temp_val_byte, 16)
-                    except ValueError:
-                        logger.warning(f"Could not convert temperature byte '{temp_val_byte}' for attribute ID {attr_id}. Using full raw value as fallback.")
-                        # If conversion fails, the raw_value from the full 6 bytes will be used
-                        
-                # For 0xC2 (Temperature Celsius), the doc explicitly states "Lowest byte of the raw value contains the exact temperature value (Celsius degrees)."
-                if attr_id == 0xC2:
-                    # The lowest byte of the 6-byte raw value (current_block[10])
-                    temp_val_byte = current_block[10]
-                    try:
-                        raw_value = int(temp_val_byte, 16)
-                    except ValueError:
-                        logger.warning(f"Could not convert temperature byte '{temp_val_byte}' for attribute ID {attr_id}. Using full raw value as fallback.")
-                        pass # Keep the default raw_value from bytes 5-10
-                
-                attributes[attr_name] = raw_value
-                i += 12 # Move to the next 12-byte block
-                
-        except Exception as e:
-            logger.error(f"Failed to parse SMART data: {e}", exc_info=True)
-            return {}
+            byte_array = []
+            for i in range(0, len(hex_clean), 2):
+                byte_array.append(int(hex_clean[i:i+2], 16))
             
+            start_index = 0
+            if len(byte_array) >= 2 and (byte_array[0] == 0x01 and byte_array[1] == 0x00) or (byte_array[0] == 0x2f and byte_array[1] == 0x00):
+                start_index = 2
+
+            i = start_index
+            while i + 10 < len(byte_array):
+                try:
+                    attr_id = byte_array[i]
+                    # Check if attr_id is within a reasonable range for SMART attributes (1-255)
+                    if not (1 <= attr_id <= 255):
+                        i += 1
+                        continue
+                    
+                    # Ensure there are enough bytes for the full 11-byte structure
+                    if i + 10 >= len(byte_array):
+                        logger.warning(f"Not enough bytes for attribute ID {attr_id} at index {i}. Breaking.")
+                        break
+
+                    normalized_value = byte_array[i+3]
+                    worst_value = byte_array[i+4]
+                    
+                    # Raw value is 6 bytes, little-endian
+                    raw_value_bytes = byte_array[i+5 : i+11]
+                    
+                    # Convert 6 little-endian bytes to an integer
+                    raw_value = 0
+                    for k, byte_val in enumerate(raw_value_bytes):
+                        raw_value |= (byte_val << (k * 8))
+
+                    attr_name_map = {
+                        0x01: "raw_read_error_rate",
+                        0x03: "spin_up_time",
+                        0x04: "start_stop_count",
+                        0x05: "reallocated_sector_count",
+                        0x07: "seek_error_rate",
+                        0x09: "power_on_hours",
+                        0x0C: "power_cycle_count",
+                        0x53: "initial_bad_block_count", # 83 or 'Total_Initial_Bad_Blocks' on some drives
+                        0xB1: "wear_leveling_count",     # 177
+                        0xB3: "used_reserved_block_count_total", # 179
+                        0xB4: "unused_reserved_block_count_total", # 180
+                        0xB5: "program_fail_count_total", # 181
+                        0xB6: "erase_fail_count_total", # 182
+                        0xB7: "runtime_bad_block",      # 183
+                        0xB8: "end_to_end_error",       # 184
+                        0xBB: "uncorrectable_error_count", # 187
+                        0xBE: "airflow_temperature_celsius", # 190
+                        0xC2: "temperature_celsius",    # 194
+                        0xC3: "hardware_ecc_recovered", # 195
+                        0xC5: "current_pending_sector_count", # 197
+                        0xC6: "uncorrectable_sector_count", # 198
+                        0xC7: "udma_crc_error_count",   # 199
+                        0xCA: "data_address_mark_errors", # 202
+                        0xEB: "por_recovery_count",     # 235
+                        0xF1: "total_host_writes",      # 241
+                        0xF2: "total_host_reads",       # 242
+                        0xF3: "total_host_writes_expanded", # 243
+                        0xF4: "total_host_reads_expanded",  # 244
+                        0xF5: "remaining_rated_write_endurance", # 245
+                        0xF6: "cumulative_host_sectors_written", # 246
+                        0xF7: "host_program_page_count", # 247
+                        0xFB: "minimum_spares_remaining", # 251 (or NAND_Writes in smartctl)
+                    }
+                    
+                    attr_name = attr_name_map.get(attr_id, f"unknown_{attr_id:02x}")
+
+                    # Special handle for id 194 (temperature_celsius)
+                    attributes[attr_name] = raw_value_bytes[0] if attr_id == 0xC2 else raw_value
+                    
+                    i += 11
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Failed to parse 11-byte block at index {i}: {e}. Trying next byte.")
+                    i += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process SMART data string: {e}", exc_info=True)
+            return {}
+
         logger.debug(f"Parsed SMART attributes: {attributes}")
         return attributes
 
 
     def main(self) -> str:
-        """Main method to collect and generate Prometheus metrics."""
         logger.info(f"Starting metrics collection for host: {self.host}")
         try:
             data = self.get_perccli_json("/cALL show all J")
@@ -184,22 +176,21 @@ class PercMetrics:
             logger.error(f"Failed to fetch initial perccli data: {e}")
             raise
 
-
         controllers = data.get("Controllers", [])
         for controller in controllers:
             response = controller.get("Response Data", {})
             controller_index = response.get("Basics", {}).get("Controller", "Unknown")
             self.handle_common_controller(response)
             driver_name = response.get("Version", {}).get("Driver Name", "Unknown")
+
             if driver_name in ["megaraid_sas", "lsi-mr3"]:
                 self.handle_megaraid_controller(response)
             elif driver_name == "mpt3sas":
                 self.handle_sas_controller(response)
+
         return generate_latest(self.registry).decode()
 
-
     def handle_common_controller(self, response: dict) -> None:
-        """Handle common controller metrics."""
         controller_index = response.get("Basics", {}).get("Controller", "Unknown")
         self.metrics["controller_info"].labels(
             controller=controller_index,
@@ -215,22 +206,18 @@ class PercMetrics:
                 break
 
     def handle_sas_controller(self, response: dict) -> None:
-        """Handle SAS controller metrics."""
         controller_index = response.get("Basics", {}).get("Controller", "Unknown")
         self.metrics["controller_status"].labels(controller=controller_index).set(
             1 if response.get("Status", {}).get("Controller Status") == "OK" else 0
         )
 
     def handle_megaraid_controller(self, response: dict) -> None:
-        """Handle MegaRAID controller metrics, including SMART data."""
         controller_index = response.get("Basics", {}).get("Controller", "Unknown")
-
         for drive in response.get("PD LIST", []):
             enclosure, slot = drive.get("EID:Slt", "0:0").split(":")[:2]
             drive_path = f"/c{controller_index}/e{enclosure}/s{slot}"
             smart_data = self.get_perccli_smart(drive_path)
             smart_attributes = self.parse_smart_data(smart_data)
-            logger.debug(f"SMART ATTRIBUTES: {smart_attributes}")
             self.create_metrics_of_physical_drive(drive, [], controller_index, smart_attributes)
 
         for vd in response.get("VD LIST", []):
@@ -246,7 +233,6 @@ class PercMetrics:
             self.metrics["bbu_health"].labels(controller=controller_index).set(bbu_health)
 
     def create_metrics_of_physical_drive(self, physical_drive: dict, detailed_info_array: list, controller_index: str, smart_attributes: dict) -> None:
-        """Create metrics for a physical drive, including SMART attributes."""
         enclosure, slot = physical_drive.get("EID:Slt", "0:0").split(":")[:2]
         drive_identifier = f"Drive /c{controller_index}/e{enclosure}/s{slot}"
         state = physical_drive.get("State", "Unknown")
@@ -254,57 +240,95 @@ class PercMetrics:
         self.metrics["drive_status"].labels(controller=controller_index, drive=drive_identifier).set(status)
 
         if "Temp" in physical_drive:
-            temp = int(physical_drive["Temp"].replace("C", ""))
-            self.metrics["drive_temp"].labels(controller=controller_index, drive=drive_identifier).set(temp)
+            try:
+                temp = int(physical_drive["Temp"].replace("C", ""))
+                self.metrics["drive_temp"].labels(controller=controller_index, drive=drive_identifier).set(temp)
+            except Exception:
+                pass
+
         for attr, value in smart_attributes.items():
-
-            self.metrics["drive_smart"].labels(controller=controller_index, drive=drive_identifier, attribute=attr).set(value)
-
+            # Ensure value is numeric before setting
+            if isinstance(value, (int, float)):
+                self.metrics["drive_smart"].labels(controller=controller_index, drive=drive_identifier, attribute=attr).set(value)
+            else:
+                logger.warning(f"SMART attribute '{attr}' for drive '{drive_identifier}' has non-numeric value '{value}'. Skipping.")
 
     def get_perccli_json(self, perccli_args: str) -> dict:
-        """Execute perccli command over SSH and return JSON output."""
         return self._run_perccli_command(perccli_args)
 
-
     def get_perccli_smart(self, drive_path: str) -> str:
-        """Fetch SMART data for a specific drive."""
         cmd = f"{drive_path} show smart"
         output = self._run_perccli_command(cmd, expect_json=False)
-        match = re.search(r'Smart Data Info .*? = \n([0-9a-fA-F \n]+)', output, re.DOTALL)
-        return match.group(1).replace('\n', '').strip() if match else ""
 
+        match = re.search(r'Smart Data Info .*? = \n\s*([0-9a-fA-F\s\n]+?)(?:\n\n|\Z)', output, re.DOTALL)
+        
+        if match:
+            cleaned_hex_data = re.sub(r'\s+', '', match.group(1)).strip()
+            return cleaned_hex_data
+        else:
+            logger.warning(f"No SMART data found in perccli output for {drive_path}")
+            return ""
 
     def _run_perccli_command(self, perccli_args: str, expect_json: bool = True) -> dict | str:
-        """Internal method to run perccli command over SSH."""
         safe_args = shlex.quote(perccli_args)
-        cmd = f"sshpass -p {shlex.quote(self.password)} ssh -o StrictHostKeyChecking=no {shlex.quote(self.username)}@{shlex.quote(self.host)} 'cd /opt/lsi/perccli && ./perccli {safe_args}'"
-        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        stdout, stderr = proc.communicate(timeout=30)
-        if proc.returncode != 0:
-            raise RuntimeError(f"perccli failed: {stderr}")
-        if expect_json:
-            return json.loads(stdout)
-        return stdout
+        cmd = f"ssh -o StrictHostKeyChecking=no {shlex.quote(self.username)}@{shlex.quote(self.host)} 'perccli64 {safe_args}'"
+        logger.debug(f"Executing command: {cmd}")
+        try:
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+            stdout, stderr = proc.communicate(timeout=60)
 
+            if proc.returncode != 0:
+                error_msg = f"perccli command '{perccli_args}' failed with exit code {proc.returncode}. Stderr: {stderr.strip()}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
+            if expect_json:
+                try:
+                    return json.loads(stdout)
+                except json.JSONDecodeError as e:
+                    error_msg = f"Failed to decode JSON from perccli output. Error: {e}. Output: {stdout.strip()}"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+            return stdout
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            error_msg = f"perccli command '{perccli_args}' timed out after 60 seconds. Stderr: {stderr.decode().strip()}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        except Exception as e:
+            error_msg = f"An error occurred while running perccli command '{perccli_args}': {e}. Stderr: {stderr.decode().strip() if 'stderr' in locals() else ''}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
 
 @app.route("/metrics")
 def metrics_route():
-    """Handle /metrics endpoint to serve Prometheus metrics."""
     target = request.args.get("target")
     if not target or target not in config["targets"]:
         return Response(f"Invalid target '{target}'", status=400, mimetype="text/plain")
     tcfg = config["targets"][target]
-    metrics = PercMetrics(tcfg["username"], tcfg["password"], target).main()
-    return Response(metrics, mimetype="text/plain; version=0.0.4")
+    
+    metrics_collector = PercMetrics(tcfg["username"], tcfg["password"], target)
+    try:
+        metrics = metrics_collector.main()
+        return Response(metrics, mimetype="text/plain; version=0.0.4")
+    except RuntimeError as e:
+        logger.error(f"Error collecting metrics for target {target}: {e}")
+        return Response(f"Error collecting metrics: {e}", status=500, mimetype="text/plain")
 
 
 def load_config(path: str) -> dict:
-    """Load configuration from YAML file."""
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
+    try:
+        with open(path, "r") as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error(f"Configuration file not found at {path}")
+        raise
+    except yaml.YAMLError as e:
+        logger.error(f"Error parsing YAML configuration from {path}: {e}")
+        raise
 
 if __name__ == "__main__":
-    config_path = os.environ.get("CONFIG_FILE_PATH", "/app/config.yml")
+    config_path = os.environ.get("CONFIG_FILE_PATH", "config.yml")
     config = load_config(config_path)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10424)), debug=True)
